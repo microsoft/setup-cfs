@@ -1,0 +1,282 @@
+# Setup OIDC auth for GitHub Actions https://docs.github.com/en/actions/security-for-github-actions/security-hardening-your-deployments/configuring-openid-connect-in-azure
+
+name: 'Setup CFS'
+description: 'Setup build for Azure Central Feed Services'
+author: 1ES
+
+inputs:
+  # Azure DevOps Artifacts private feed URL
+  # Project scope: https://pkgs.dev.azure.com/<org_name>/<project_name>/_packaging/<feed_name>/
+  # Organization scope: https://pkgs.dev.azure.com/<org_name>/_packaging/<feed_name>/
+  feed-url:
+    description: 'Azure DevOps Artifacts feed URL (must start with https://)'
+    required: false
+    default: 'https://pkgs.dev.azure.com/'
+
+  variable-name:
+    description: 'Environment variable name to store the authentication token'
+    required: false
+    default: 'CFS_ACCESSTOKEN'
+
+  encode-variable:
+    description: 'Whether to Base64 encode the environment variable value (useful for legacy systems)'
+    required: false
+    default: 'false'
+
+  cfs-auth-token:
+    description: 'Authentication method: "oidc" for OIDC token or provide a PAT token directly'
+    required: false
+    default: 'oidc'
+
+  nuget:
+    description: 'Install and configure NuGet Artifacts Credential Provider'
+    required: false
+    default: 'false'
+
+  nuget-config:
+    description: 'Create nuget.config file for the specified feed'
+    required: false
+    default: 'false'
+
+  nuget-config-path:
+    description: 'Path where the nuget.config file will be created'
+    required: false
+    default: 'nuget.config'
+
+  npm-config:
+    description: 'Create .npmrc file for the specified feed'
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Validate Inputs
+      shell: bash
+      run: |
+        # Validate feed URL format
+        FEED_URL="${{ inputs.feed-url }}"
+        if [[ ! $FEED_URL =~ ^https?:// ]]; then
+          echo "::error::feed-url must start with http:// or https://"
+          exit 1
+        fi
+
+        # Validate authentication token type
+        AUTH_TOKEN=$(echo "${{ inputs.cfs-auth-token }}" | tr '[:upper:]' '[:lower:]')
+        if [ "$AUTH_TOKEN" != "oidc" ] && [ -z "${{ inputs.cfs-auth-token }}" ]; then
+          echo "::error::cfs-auth-token must be 'oidc' or a valid PAT token"
+          exit 1
+        fi
+
+        # Validate variable name format
+        if [[ ! "${{ inputs.variable-name }}" =~ ^[A-Z_][A-Z0-9_]*$ ]]; then
+          echo "::error::variable-name must be a valid environment variable name (uppercase letters, numbers, and underscores only)"
+          exit 1
+        fi
+
+        # Validate boolean inputs
+        for input in "encode-variable" "nuget" "nuget-config" "npm-config"; do
+          eval "value=\${{ inputs.$input }}"
+          if [ "$value" != "true" ] && [ "$value" != "false" ]; then
+            echo "::error::$input must be 'true' or 'false'"
+            exit 1
+          fi
+        done
+
+        echo "Input validation completed successfully"
+
+    # ref: https://github.com/microsoft/artifacts-credprovider
+
+    - name: Install Artifacts Credential Helper on Windows
+      if: ${{ inputs.nuget == 'true' && runner.os == 'Windows' }}
+      shell: pwsh
+      run: |
+        iex "& { $(irm https://aka.ms/install-artifacts-credprovider.ps1) } -AddNetfx"
+
+    - name: Install Artifacts Credential Helper on Linux
+      if: ${{ inputs.nuget == 'true' && runner.os == 'Linux' }}
+      shell: bash
+      run: |
+        sh -c "$(curl -fsSL https://aka.ms/install-artifacts-credprovider.sh)"
+
+    # ref: https://learn.microsoft.com/en-us/azure/devops/integrate/get-started/authentication/service-principal-managed-identity?view=azure-devops#q-can-i-use-a-service-principal-or-managed-identity-with-azure-cli
+    # resource 499b84ac-1321-427f-aa17-267ca6975798 safe to hard-code, refers to the Azure DevOps resource (ref: https://learn.microsoft.com/en-us/azure/devops/organizations/accounts/manage-personal-access-tokens-via-api?view=azure-devops)
+    - name: Setup CFS Credentials
+      shell: bash
+      run: |
+        # Convert to lowercase for case-insensitive comparison
+        AUTH_TOKEN_TYPE=$(echo "${{ inputs.cfs-auth-token }}" | tr '[:upper:]' '[:lower:]')
+
+        if [ "$AUTH_TOKEN_TYPE" == "oidc" ]; then
+          # Validate Azure CLI is available and authenticated
+          if ! command -v az &> /dev/null; then
+            echo "::error::Azure CLI is required for OIDC authentication but not found"
+            exit 1
+          fi
+
+          # Get Azure DevOps access token using OIDC
+          CFS_ACCESSTOKEN=$(az account get-access-token \
+            --resource 499b84ac-1321-427f-aa17-267ca6975798 \
+            --query accessToken \
+            --output tsv 2>/dev/null)
+
+          if [ -z "$CFS_ACCESSTOKEN" ] || [ "$CFS_ACCESSTOKEN" == "null" ]; then
+            echo "::error::Failed to obtain Azure DevOps access token. Ensure OIDC is properly configured."
+            exit 1
+          fi
+        else
+          # Use provided PAT token
+          CFS_ACCESSTOKEN="${{ inputs.cfs-auth-token }}"
+
+          if [ -z "$CFS_ACCESSTOKEN" ]; then
+            echo "::error::No authentication token provided"
+            exit 1
+          fi
+        fi
+
+        # Mask the token to prevent exposure in logs
+        echo "::add-mask::$CFS_ACCESSTOKEN"
+        echo "${{ inputs.variable-name }}=$CFS_ACCESSTOKEN" >> $GITHUB_ENV
+
+        # Setup NuGet environment variables if needed
+        if [ "${{ inputs.nuget }}" == "true" ]; then
+          URI_PREFIX=$(echo "${{ inputs.feed-url }}" | sed 's/_packaging.*//')
+          echo "::add-mask::$URI_PREFIX"
+          echo "VSS_NUGET_ACCESSTOKEN=$CFS_ACCESSTOKEN" >> $GITHUB_ENV
+          echo "VSS_NUGET_URI_PREFIXES=$URI_PREFIX" >> $GITHUB_ENV
+        fi
+
+    - name: Create Nuget Configuration File
+      if: ${{ inputs.nuget == 'true' && inputs.nuget-config == 'true'}}
+      shell: bash
+      run: |
+        # Validate inputs
+        FEED="${{ inputs.feed-url }}"
+        CONFIG_PATH="${{ inputs.nuget-config-path }}"
+
+        if [ -z "$FEED" ]; then
+          echo "::error::Feed URL is required for NuGet configuration"
+          exit 1
+        fi
+
+        if [ -z "$CONFIG_PATH" ]; then
+          echo "::error::NuGet config path is required"
+          exit 1
+        fi
+
+        # Process feed URL
+        URI_PREFIX=$(echo "$FEED" | sed 's/_packaging.*//')
+
+        if [[ $FEED == *"nuget/v3/index.json"* ]]; then
+          NUGET_FEED="$FEED"
+        else
+          NUGET_FEED="$FEED/nuget/v3/index.json"
+        fi
+
+        # Validate URL format
+        if [[ ! $NUGET_FEED =~ ^https?:// ]]; then
+          echo "::error::Invalid feed URL format: $NUGET_FEED"
+          exit 1
+        fi
+
+        echo "Creating NuGet configuration file at: $CONFIG_PATH"
+        echo "Feed URL: $NUGET_FEED"
+
+        # Create nuget.config with proper XML formatting
+        cat > "$CONFIG_PATH" << EOF
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <packageSources>
+    <clear />
+    <add key="CFS-Feed" value="$NUGET_FEED" />
+  </packageSources>
+</configuration>
+EOF
+
+        echo "Successfully created NuGet configuration file"
+
+    - name: Create .npmrc
+      if: ${{ inputs.npm-config == 'true'}}
+      shell: bash
+      run: |
+        # Validate feed URL
+        FEED="${{ inputs.feed-url }}"
+        if [ -z "$FEED" ]; then
+          echo "::error::Feed URL is required for npm configuration"
+          exit 1
+        fi
+
+        # Process feed URL for npm registry format
+        FEED=${FEED#https://}
+        FEED=${FEED%/}
+
+        if [[ ! $FEED == */npm ]]; then
+          FEED="$FEED/npm"
+        fi
+
+        # Get token based on authentication type
+        AUTH_TOKEN_TYPE=$(echo "${{ inputs.cfs-auth-token }}" | tr '[:upper:]' '[:lower:]')
+
+        if [ "$AUTH_TOKEN_TYPE" == "oidc" ]; then
+          # For OIDC, use token directly (already base64 encoded by Azure)
+          TOKEN="${{ env[inputs.variable-name] }}"
+        else
+          # For PAT, encode as base64 for npm authentication
+          TOKEN=$(echo -n "${{ env[inputs.variable-name] }}" | base64 -w 0)
+        fi
+
+        if [ -z "$TOKEN" ]; then
+          echo "::error::Authentication token not found in environment variable ${{ inputs.variable-name }}"
+          exit 1
+        fi
+
+        echo "::add-mask::$TOKEN"
+
+        # Create .npmrc configuration
+        NPMRC_FILE="${HOME}/.npmrc"
+
+        # Registry configuration
+        echo "//${FEED}/registry/:username=github-actions" >> "$NPMRC_FILE"
+        echo "//${FEED}/registry/:email=actions@github.com" >> "$NPMRC_FILE"
+
+        if [ "$AUTH_TOKEN_TYPE" == "oidc" ]; then
+          echo "//${FEED}/registry/:_authToken=${TOKEN}" >> "$NPMRC_FILE"
+        else
+          echo "//${FEED}/registry/:_password=${TOKEN}" >> "$NPMRC_FILE"
+        fi
+
+        # Feed configuration
+        echo "//${FEED}/:username=github-actions" >> "$NPMRC_FILE"
+        echo "//${FEED}/:email=actions@github.com" >> "$NPMRC_FILE"
+
+        if [ "$AUTH_TOKEN_TYPE" == "oidc" ]; then
+          echo "//${FEED}/:_authToken=${TOKEN}" >> "$NPMRC_FILE"
+        else
+          echo "//${FEED}/:_password=${TOKEN}" >> "$NPMRC_FILE"
+        fi
+
+        echo "Successfully configured .npmrc for feed: ${FEED}"
+
+    - name: Encode token in environment variable
+      if: ${{ inputs.encode-variable == 'true'}}
+      shell: bash
+      run: |
+        # Get current token value
+        CURRENT_TOKEN="${{ env[inputs.variable-name] }}"
+
+        if [ -z "$CURRENT_TOKEN" ]; then
+          echo "::error::No token found in environment variable ${{ inputs.variable-name }}"
+          exit 1
+        fi
+
+        # Base64 encode the token
+        ENCODED_TOKEN=$(echo -n "$CURRENT_TOKEN" | base64 -w 0)
+
+        if [ -z "$ENCODED_TOKEN" ]; then
+          echo "::error::Failed to encode token"
+          exit 1
+        fi
+
+        echo "::add-mask::$ENCODED_TOKEN"
+        echo "${{ inputs.variable-name }}=$ENCODED_TOKEN" >> $GITHUB_ENV
+        echo "Successfully encoded token in environment variable"
