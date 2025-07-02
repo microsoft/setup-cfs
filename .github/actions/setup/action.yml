@@ -75,13 +75,25 @@ runs:
         fi
 
         # Validate boolean inputs
-        for input in "encode-variable" "nuget" "nuget-config" "npm-config"; do
-          eval "value=\${{ inputs.$input }}"
-          if [ "$value" != "true" ] && [ "$value" != "false" ]; then
-            echo "::error::$input must be 'true' or 'false'"
-            exit 1
-          fi
-        done
+        if [ "${{ inputs.encode-variable }}" != "true" ] && [ "${{ inputs.encode-variable }}" != "false" ]; then
+          echo "::error::encode-variable must be 'true' or 'false'"
+          exit 1
+        fi
+
+        if [ "${{ inputs.nuget }}" != "true" ] && [ "${{ inputs.nuget }}" != "false" ]; then
+          echo "::error::nuget must be 'true' or 'false'"
+          exit 1
+        fi
+
+        if [ "${{ inputs.nuget-config }}" != "true" ] && [ "${{ inputs.nuget-config }}" != "false" ]; then
+          echo "::error::nuget-config must be 'true' or 'false'"
+          exit 1
+        fi
+
+        if [ "${{ inputs.npm-config }}" != "true" ] && [ "${{ inputs.npm-config }}" != "false" ]; then
+          echo "::error::npm-config must be 'true' or 'false'"
+          exit 1
+        fi
 
         echo "Input validation completed successfully"
 
@@ -147,7 +159,7 @@ runs:
         fi
 
     - name: Create Nuget Configuration File
-      if: ${{ inputs.nuget == 'true' && inputs.nuget-config == 'true'}}
+      if: ${{ inputs.nuget == 'true' && inputs.nuget-config == 'true' }}
       shell: bash
       run: |
         # Validate inputs
@@ -196,7 +208,7 @@ EOF
         echo "Successfully created NuGet configuration file"
 
     - name: Create .npmrc
-      if: ${{ inputs.npm-config == 'true'}}
+      if: ${{ inputs.npm-config == 'true' }}
       shell: bash
       run: |
         # Validate feed URL
@@ -258,7 +270,7 @@ EOF
         echo "Successfully configured .npmrc for feed: ${FEED}"
 
     - name: Encode token in environment variable
-      if: ${{ inputs.encode-variable == 'true'}}
+      if: ${{ inputs.encode-variable == 'true' }}
       shell: bash
       run: |
         # Get current token value
