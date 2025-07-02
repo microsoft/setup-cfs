@@ -8,8 +8,7 @@ on:
 
 jobs:
   hosted_pool_linux:
-    name: Hosted Pool Linux
-    runs-on: [self-hosted, 1ES.Pool=1es-pool-linux]
+    runs-on: [ubuntu-latest]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -91,7 +90,7 @@ jobs:
 
   hosted_pool_windows:
     name: Hosted Pool Windows
-    runs-on: [self-hosted, 1ES.Pool=1es-pool-windows]
+    runs-on: [windows-latest]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
