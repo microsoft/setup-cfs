@@ -11,10 +11,10 @@ jobs:
     runs-on: [ubuntu-latest]
     steps:
       - name: Checkout code
-        uses: actions/setup/checkout@v4
+        uses: actions/checkout@v4
 
       - name: Setup CFS
-        uses: ./
+        uses: ./actions/setup
         with:
           feed-url: "https://pkgs.dev.azure.com/contoso/MyFeed/_packaging/MyFeed/"
           cfs-auth-token: "fake-token"
@@ -93,10 +93,10 @@ jobs:
     runs-on: [windows-latest]
     steps:
       - name: Checkout code
-        uses: actions/setup/checkout@v4
+        uses: actions/checkout@v4
 
       - name: Setup CFS
-        uses: ./
+        uses: ./actions/setup
         with:
           feed-url: "https://pkgs.dev.azure.com/contoso/MyFeed/_packaging/MyFeed/"
           cfs-auth-token: "fake-token"
