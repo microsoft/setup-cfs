@@ -195,15 +195,15 @@ runs:
         echo "Feed URL: $NUGET_FEED"
 
         # Create nuget.config with proper XML formatting
-        cat > "$CONFIG_PATH" << EOF
-<?xml version="1.0" encoding="utf-8"?>
-<configuration>
-  <packageSources>
-    <clear />
-    <add key="CFS-Feed" value="$NUGET_FEED" />
-  </packageSources>
-</configuration>
-EOF
+        {
+          echo '<?xml version="1.0" encoding="utf-8"?>'
+          echo '<configuration>'
+          echo '  <packageSources>'
+          echo '    <clear />'
+          echo "    <add key=\"CFS-Feed\" value=\"$NUGET_FEED\" />"
+          echo '  </packageSources>'
+          echo '</configuration>'
+        } > "$CONFIG_PATH"
 
         echo "Successfully created NuGet configuration file"
 
